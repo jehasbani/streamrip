@@ -2,6 +2,7 @@ import asyncio
 import base64
 import functools
 import hashlib
+import http.client
 import itertools
 import json
 import logging
@@ -26,6 +27,12 @@ from ..exceptions import NonStreamableError
 
 logger = logging.getLogger("streamrip")
 
+# Some CDN endpoints (observed with certain Qobuz tracks/redirect chains) respond
+# with more headers than the stdlib's hardcoded limit of 100, which `requests`
+# (via urllib3 -> http.client) enforces when parsing the response. That raises
+# `http.client.HTTPException: got more than 100 headers` and aborts the download.
+# Raise the ceiling well above what any legitimate response should need.
+http.client._MAXHEADERS = 1000
 
 BLOWFISH_SECRET = "g4el58wc0zvf9na1"
 
