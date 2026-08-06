@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from functools import wraps
 from typing import Any
 
@@ -19,8 +20,10 @@ from rich.traceback import install
 from .. import __version__, db
 from ..config import DEFAULT_CONFIG_PATH, Config, OutdatedConfigError, set_user_defaults
 from ..console import console
+from ..media import PendingArtist
 from ..utils.ssl_utils import get_aiohttp_connector_kwargs
 from .main import Main
+from .parse_url import parse_url
 
 
 def coro(f):
@@ -166,16 +169,34 @@ def rip(
 
 @rip.command()
 @click.argument("urls", nargs=-1, required=True)
+@click.option(
+    "--studio-only",
+    is_flag=True,
+    default=False,
+    help="For artist URLs: download only studio albums, excluding live recordings, "
+    "compilations, and extra editions.",
+)
 @click.pass_context
 @coro
-async def url(ctx, urls):
-    """Download content from URLs."""
+async def url(ctx, urls, studio_only):
+    """Download content from URLs.
+
+    To download an entire Qobuz discography, pass an artist URL, e.g.:
+
+        rip url https://www.qobuz.com/us-en/artist/12345
+
+    Use --studio-only to limit the download to studio albums only.
+    """
     if ctx.obj["config"] is None:
         return
 
     try:
         with ctx.obj["config"] as cfg:
             cfg: Config
+
+            if studio_only:
+                cfg.session.qobuz_filters.non_studio_albums = True
+
             updates = cfg.session.misc.check_for_updates
             if updates:
                 # Run in background
@@ -208,6 +229,88 @@ async def url(ctx, urls):
 
         console.print(f"[red]SSL Certificate verification error: {e}[/red]")
         print_ssl_error_help()
+
+
+@rip.command("artist-albums")
+@click.argument("urls", nargs=-1, required=True)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print 'YYYY - Title' lines instead of URLs. Nothing is downloaded.",
+)
+@click.pass_context
+@coro
+async def artist_albums(ctx, urls, dry_run):
+    """List studio and live album URLs for one or more artist pages.
+
+    Resolves the full discography and prints only studio and live full albums,
+    dropping singles, features, compilations, and duplicate versions. Output is
+    one URL per line, ready to pipe into `rip url` or redirect to a file.
+
+    Example:
+
+        rip artist-albums https://www.qobuz.com/us-en/artist/12345
+
+        rip artist-albums --dry-run https://www.qobuz.com/us-en/artist/12345
+
+        rip artist-albums https://www.qobuz.com/us-en/artist/12345 > urls.txt && rip file urls.txt
+    """
+    if ctx.obj["config"] is None:
+        return
+
+    _url_templates: dict[str, str] = {
+        "qobuz": "https://www.qobuz.com/album/{id}",
+        "tidal": "https://www.tidal.com/album/{id}",
+        "deezer": "https://www.deezer.com/album/{id}",
+    }
+
+    with ctx.obj["config"] as cfg:
+        cfg: Config
+        async with Main(cfg) as main:
+            for artist_url in urls:
+                parsed = parse_url(artist_url)
+                if parsed is None:
+                    console.print(
+                        f"[red]Cannot parse URL:[/red] [cyan]{artist_url}[/cyan]",
+                        stderr=True,
+                    )
+                    continue
+
+                client = await main.get_logged_in_client(parsed.source)
+                pending = await parsed.into_pending(client, cfg, main.database)
+
+                if not isinstance(pending, PendingArtist):
+                    console.print(
+                        f"[red]{artist_url} is not an artist URL[/red]",
+                        stderr=True,
+                    )
+                    continue
+
+                artist = await pending.resolve()
+                if artist is None:
+                    console.print(
+                        f"[red]Could not resolve artist from {artist_url}[/red]",
+                        stderr=True,
+                    )
+                    continue
+
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    cfg.session.downloads.folder = tmp_dir
+                    albums = await artist.resolve_studio_and_live()
+                template = _url_templates.get(
+                    artist.client.source,
+                    f"https://www.{artist.client.source}.com/album/{{id}}",
+                )
+
+                lines = []
+                for album_id, year, title in albums:
+                    if dry_run:
+                        lines.append(f"{year} - {title}")
+                    else:
+                        lines.append(template.format(id=album_id))
+                if lines:
+                    click.echo(" ".join(lines))
 
 
 @rip.command()

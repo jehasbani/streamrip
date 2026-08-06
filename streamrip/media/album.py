@@ -58,6 +58,9 @@ class PendingAlbum(Pending):
     client: Client
     config: Config
     db: Database
+    # Optional subfolder inserted between the source dir and the album folder.
+    # Used by Artist downloads to group albums under the artist's name.
+    subfolder: str | None = None
 
     async def resolve(self) -> Album | None:
         try:
@@ -110,6 +113,11 @@ class PendingAlbum(Pending):
         config = self.config.session
         if config.downloads.source_subdirectories:
             parent = os.path.join(parent, self.client.source.capitalize())
+        if self.subfolder is not None:
+            parent = os.path.join(
+                parent,
+                clean_filepath(self.subfolder, config.filepaths.restrict_characters),
+            )
         formatter = config.filepaths.folder_format
         folder = clean_filepath(
             meta.format_folder_path(formatter), config.filepaths.restrict_characters

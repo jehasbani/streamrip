@@ -111,8 +111,7 @@ class Artist(Media):
         groups: dict[str, list[Album]] = {}
         for a in albums:
             match = cls._essence_re.match(a.meta.album)
-            assert match is not None
-            title = match.group(1).strip().lower()
+            title = match.group(1).strip().lower() if match else a.meta.album.strip().lower()
             items = groups.get(title, [])
             items.append(a)
             groups[title] = items
@@ -170,6 +169,48 @@ class Artist(Media):
         """Filter out singles."""
         return len(a.tracks) > 1
 
+    def _filter_studio_and_live(self, albums: list[Album]) -> list[Album]:
+        """Return studio and live full albums credited to this artist.
+
+        Drops features/compilations (albumartist != artist), singles (1 track),
+        and duplicate versions (best quality kept). Live albums are explicitly kept.
+        """
+        deduped = self._filter_repeats(albums)
+        return [a for a in deduped if self._features(a) and self._non_albums(a)]
+
+    async def resolve_studio_and_live(self) -> list[tuple[str, str, str]]:
+        """Resolve all pending albums and return (id, year, title) for studio+live albums.
+
+        Resolves in RESOLVE_CHUNK_SIZE batches, skips albums that fail to resolve,
+        and returns results sorted by year ascending.
+
+        Uses the original PendingAlbum.id (the API-native identifier) rather than
+        AlbumInfo.id so that the returned IDs form valid URLs. On Qobuz, AlbumInfo.id
+        is the internal qobuz_id integer, whereas the URL-compatible ID comes from
+        the artist-albums listing.
+        """
+        # Keep (pending_id, album) pairs so the original API ID survives resolution.
+        # AlbumMetadata.from_qobuz stores qobuz_id (a numeric internal key), not the
+        # slug/UPC that appears in album URLs, so we must carry the PendingAlbum.id.
+        pairs: list[tuple[str, Album]] = []
+        for batch in self.batch(self.albums, RESOLVE_CHUNK_SIZE):
+            results: list[Album | None] = await asyncio.gather(
+                *[a.resolve() for a in batch]
+            )
+            for pending, album in zip(batch, results):
+                if album is not None:
+                    pairs.append((pending.id, album))
+
+        albums_only = [a for _, a in pairs]
+        filtered = self._filter_studio_and_live(albums_only)
+
+        # _filter_studio_and_live returns the same Album objects, so identity
+        # comparison lets us recover the correct pending_id for each survivor.
+        kept_ids = {id(a) for a in filtered}
+        filtered_pairs = [(pid, a) for pid, a in pairs if id(a) in kept_ids]
+        filtered_pairs.sort(key=lambda p: p[1].meta.year)
+        return [(pid, a.meta.year, a.meta.album) for pid, a in filtered_pairs]
+
     @staticmethod
     def batch(iterable, n=1):
         total = len(iterable)
@@ -202,7 +243,7 @@ class PendingArtist(Pending):
             return None
 
         albums = [
-            PendingAlbum(album_id, self.client, self.config, self.db)
+            PendingAlbum(album_id, self.client, self.config, self.db, subfolder=meta.name)
             for album_id in meta.album_ids()
         ]
         return Artist(meta.name, albums, self.client, self.config)

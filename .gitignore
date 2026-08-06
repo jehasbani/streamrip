@@ -21,3 +21,7 @@ StreamripDownloads
 /.mypy_cache
 .DS_Store
 pyrightconfig.json
+
+# Claude Code local worktrees/state
+.claude/
+DOWNLOAD COMMANDS FOR STREAMRIP
