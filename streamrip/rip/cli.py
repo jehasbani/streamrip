@@ -23,6 +23,7 @@ from ..console import console
 from ..media import PendingArtist
 from ..utils.ssl_utils import get_aiohttp_connector_kwargs
 from .main import Main
+from .organize import organize_library
 from .parse_url import parse_url
 
 
@@ -176,9 +177,21 @@ def rip(
     help="For artist URLs: download only studio albums, excluding live recordings, "
     "compilations, and extra editions.",
 )
+@click.option(
+    "--organize",
+    is_flag=True,
+    default=False,
+    help="After downloading, organize the downloads folder (see `rip organize --help`).",
+)
+@click.option(
+    "--organize-dry-run",
+    is_flag=True,
+    default=False,
+    help="With --organize, print what would be reorganized without changing any files.",
+)
 @click.pass_context
 @coro
-async def url(ctx, urls, studio_only):
+async def url(ctx, urls, studio_only, organize, organize_dry_run):
     """Download content from URLs.
 
     To download an entire Qobuz discography, pass an artist URL, e.g.:
@@ -186,6 +199,9 @@ async def url(ctx, urls, studio_only):
         rip url https://www.qobuz.com/us-en/artist/12345
 
     Use --studio-only to limit the download to studio albums only.
+
+    Use --organize to tidy up the downloads folder afterwards (equivalent to
+    running `rip organize` with no arguments once the download finishes).
     """
     if ctx.obj["config"] is None:
         return
@@ -212,6 +228,14 @@ async def url(ctx, urls, studio_only):
                 await main.add_all(urls)
                 await main.resolve()
                 await main.rip()
+
+            if organize:
+                console.print(
+                    f"\n[bold]Organizing[/bold] [cyan]{cfg.session.downloads.folder}[/cyan]"
+                )
+                organize_library(
+                    cfg.session.downloads.folder, [], organize_dry_run
+                )
 
             if version_coro is not None:
                 latest_version, notes = await version_coro
@@ -365,6 +389,65 @@ async def file(ctx, path):
 
         console.print(f"[red]SSL Certificate verification error: {e}[/red]")
         print_ssl_error_help()
+
+
+@rip.command()
+@click.argument("artists", nargs=-1)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print what would happen without moving or modifying any files.",
+)
+@click.option(
+    "--base-dir",
+    type=click.Path(file_okay=False, dir_okay=True),
+    metavar="PATH",
+    help="Root directory containing per-artist folders to organize. "
+    "Defaults to the configured downloads folder.",
+)
+@click.pass_context
+def organize(ctx, artists, dry_run, base_dir):
+    """Organize a downloaded music library into a clean per-artist layout.
+
+    Tidies up folders shaped like streamrip's discography downloads
+    (`<Artist>/<Artist> - <Album> (<Year>) [<Container>] [...]`) into a flat
+    `<Artist>/<Year> - <Album>/DD - Title.ext` layout: flattens `Disc N`
+    subfolders, archives DJ-set source tracks, strips redundant "(Live)" and
+    other tags shared by every track onto the album name, tags every file
+    with clean artist/album/title/track/disc metadata, resizes and embeds
+    cover art, and writes an ALBUMS_QUALITY.md index per artist.
+
+    Only album folders sitting directly under an artist folder are touched;
+    anything already filed into a legacy category subfolder (Studio, Live,
+    EPs, Singles, Other, Tributes & Collections) is left alone. Re-running is
+    safe -- already-organized folders are recognized and left as-is.
+
+    Pass one or more artist folder names to limit the run; omit them to
+    organize every artist folder found in the base directory.
+
+    Example usage:
+
+        rip organize
+
+        rip organize "Miles Davis" "John Coltrane"
+
+        rip organize --dry-run
+
+        rip organize --base-dir ~/Music/StreamripDownloads
+    """
+    if ctx.obj["config"] is None:
+        return
+
+    cfg = ctx.obj["config"]
+    with cfg as c:
+        c: Config
+        base = base_dir or c.session.downloads.folder
+
+    try:
+        organize_library(base, artists, dry_run)
+    except NotADirectoryError as e:
+        console.print(f"[red]{e}[/red]")
 
 
 @rip.group()

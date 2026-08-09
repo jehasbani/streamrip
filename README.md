@@ -130,6 +130,47 @@ For more customization, see the config file
 rip config open
 ```
 
+### Organizing your downloads
+
+Full discography downloads (`rip url <artist url>`) land as
+`<downloads folder>/<Artist Name>/<Artist> - <Album> (<Year>) [<Container>] [<BitDepth>B-<SamplingRate>kHz]/`.
+The `rip organize` command tidies this into a flat, readable library:
+
+```
+<downloads folder>/<Artist Name>/<Year> - <Album Title>/DD - Title.ext
+```
+
+For each album folder it will:
+
+- Flatten `Disc N` subfolders (tagging `discnumber` instead)
+- Detect DJ sets (a continuous mix + 5 or more separate source tracks) and archive the unmixed tracks to `Unmixed Tracks.7z`
+- Detect a "(Live)" tag (or any other bracketed tag, e.g. "(Remastered)") shared by every track and move it onto the album name instead of repeating it on every track
+- Detect other artists credited on the release and append `(ft. Other Artist)` to the album name
+- Rename tracks to `TT - Title.ext` (or `DD - TT - Title.ext` for multi-disc albums)
+- Resize and embed cover art, and consolidate a copy into `artwork/` and `album_artwork_compressed/` at the artist level
+- Set clean `artist`/`albumartist`/`album`/`title`/`tracknumber`/`discnumber` tags
+- Move the album folder to `<Year> - <Title>`, and write an `ALBUMS_QUALITY.md` index per artist
+
+Only album folders sitting directly under an artist folder are touched, and re-running is safe — already-organized folders are recognized and left as-is.
+
+Run it after the fact, on the whole downloads folder or specific artists:
+
+```bash
+rip organize
+rip organize "Miles Davis" "John Coltrane"
+rip organize --dry-run          # preview only, nothing is changed
+rip organize --base-dir ~/Music/StreamripDownloads
+```
+
+Or have it run automatically right after a download finishes, by passing `--organize` to `rip url`:
+
+```bash
+rip url --organize https://www.qobuz.com/us-en/artist/12345
+rip url --organize --organize-dry-run https://www.qobuz.com/us-en/artist/12345
+```
+
+DJ-set archiving needs the optional `py7zr` dependency (`pip3 install streamrip[organize]`); without it, unmixed tracks are still moved into `Unmixed Tracks/` but left uncompressed.
+
 ### Qobuz login (token-based)
 
 Qobuz no longer supports the old direct email/password API login flow used by streamrip.  
