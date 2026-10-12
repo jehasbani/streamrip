@@ -18,9 +18,9 @@ logger = logging.getLogger("streamrip")
 BASE = "https://api.tidalhifi.com/v1"
 AUTH_URL = "https://auth.tidal.com/v1/oauth2"
 
-CLIENT_ID = base64.b64decode("ZlgySnhkbW50WldLMGl4VA==").decode("iso-8859-1")
+CLIENT_ID = base64.b64decode("NE4zbjZRMXg5NUxMNUs3cA==").decode("iso-8859-1")
 CLIENT_SECRET = base64.b64decode(
-    "MU5tNUFmREFqeHJnSkZKYktOV0xlQXlLR1ZHbUlOdVhQUExIVlhBdnhBZz0=",
+    "b0tPWGZKVzM3MWNYNnhhWjBQeWhnR05CZE5MbEJaZDRBS0tZb3VnTWppaz0=",
 ).decode("iso-8859-1")
 AUTH = aiohttp.BasicAuth(login=CLIENT_ID, password=CLIENT_SECRET)
 STREAM_URL_REGEX = re.compile(
@@ -124,7 +124,8 @@ class TidalClient(Client):
                     item["lyrics"] = resp.get("lyrics") or ""
                 else:
                     item["lyrics"] = resp.get("subtitles") or resp.get("lyrics") or ""
-            except TypeError as e:
+            except (TypeError, NonStreamableError) as e:
+                # Lyrics are optional; a 404 just means the track has none.
                 logger.warning(f"Failed to get lyrics for {item_id}: {e}")
 
         logger.debug(item)
@@ -353,7 +354,7 @@ class TidalClient(Client):
         async with self.rate_limiter:
             async with self.session.get(f"{base}/{path}", params=params) as resp:
                 if resp.status == 404:
-                    logger.warning("TIDAL: track not found", resp)
+                    logger.debug("TIDAL: not found: %s", resp.url)
                     raise NonStreamableError("TIDAL: Track not found")
                 resp.raise_for_status()
                 return await resp.json()
